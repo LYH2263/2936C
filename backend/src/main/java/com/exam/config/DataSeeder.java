@@ -2,6 +2,7 @@ package com.exam.config;
 
 import com.exam.entity.*;
 import com.exam.repository.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Configuration
+@ConditionalOnProperty(name = "dataseeder.enabled", havingValue = "true", matchIfMissing = true)
 public class DataSeeder {
 
     @Bean

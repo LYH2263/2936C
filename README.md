@@ -24,6 +24,45 @@
   - 学号: 2024001
   - 密码: 123456
 
+## 🧪 集成测试
+
+### 前提条件
+- JDK 17+
+- Maven 3.8+（无需安装 MySQL，测试使用 H2 内存数据库）
+
+### 运行命令
+在 `backend` 目录下执行：
+
+```bash
+# 运行全部测试
+mvn test
+
+# 仅运行 ExamServiceStatisticsTest
+mvn test -Dtest=ExamServiceStatisticsTest
+
+# 运行单个测试方法
+mvn test -Dtest="ExamServiceStatisticsTest#testGetExamStatistics_MainFixture"
+mvn test -Dtest="ExamServiceStatisticsTest#testGetExamStatistics_ZeroSubmissions"
+mvn test -Dtest="ExamServiceStatisticsTest#testGetExamStatistics_PercentageDistributionBug"
+```
+
+### 测试架构
+| 组件 | 说明 |
+|------|------|
+| `@SpringBootTest` + `@ActiveProfiles("test")` | 启动完整 Spring 上下文，使用 H2 内存数据库 |
+| `@Transactional` | 每个测试方法自动回滚，不污染数据库 |
+| `@Sql` 脚本 | 每个测试方法通过 `cleanup.sql` + 独立 seed 脚本注入隔离的 fixture 数据 |
+
+### 测试用例说明
+- **MainFixture**：5 道题（满分 100）、3 名学生（及格 75 分 / 不及格 45 分 / 缺考），断言 `averageScore`、`passRate`、`absentCount`、分段数组、排名顺序、题目正确率与手工计算一致
+- **ZeroSubmissions**：零提交边界用例，验证全部学生缺考时返回合理默认值
+- **PercentageDistributionBug**：回归基准测试——当满分 ≠ 100 时，当前实现使用绝对分数分段而非百分比分段，该测试**预期失败**；修复分布逻辑后应通过
+
+### 相关文件
+- 测试类：`backend/src/test/java/com/exam/service/ExamServiceStatisticsTest.java`
+- SQL 脚本：`backend/src/test/resources/sql/`
+- 测试配置：`backend/src/test/resources/application-test.yml`
+
 ## 📸 功能介绍
 
 1. **多角色隔离与权限管理**  
