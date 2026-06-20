@@ -82,11 +82,27 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/login", "/api/auth/register").permitAll()
                         .requestMatchers("/api/config").permitAll()
                         .requestMatchers("/api/auth/profile").authenticated()
+                        .requestMatchers(
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/swagger-resources/**",
+                                "/webjars/**"
+                        ).permitAll()
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exception -> exception
                         .authenticationEntryPoint((request, response, authException) -> {
-                            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Error: Unauthorized");
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType("application/json;charset=UTF-8");
+                            String body = String.format(
+                                    "{\"code\":%d,\"message\":\"%s\",\"timestamp\":\"%s\",\"path\":\"%s\"}",
+                                    40100,
+                                    "未登录或登录已过期",
+                                    java.time.Instant.now().toString(),
+                                    request.getRequestURI()
+                            );
+                            response.getWriter().write(body);
                         })
                 );
         

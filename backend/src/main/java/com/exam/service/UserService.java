@@ -1,5 +1,7 @@
 package com.exam.service;
 
+import com.exam.common.BusinessException;
+import com.exam.common.ErrorCode;
 import com.exam.entity.User;
 import com.exam.repository.UserRepository;
 import org.springframework.data.domain.Page;
@@ -52,33 +54,33 @@ public class UserService {
     @Transactional
     public User createUser(User user, String currentUserRole) {
         if ("ADMIN".equals(user.getRole()) && currentUserRole.contains("TEACHER")) {
-            throw new RuntimeException("权限不足：老师无法创建管理员账号");
+            throw new BusinessException(ErrorCode.ROLE_FORBIDDEN, "权限不足：老师无法创建管理员账号");
         }
         if (userRepository.existsByUsername(user.getUsername())) {
-            throw new RuntimeException("用户名已存在");
+            throw new BusinessException(ErrorCode.USERNAME_ALREADY_EXISTS);
         }
-        
-        int minLength = systemConfigService.getConfig().getPasswordMinLength() != null ? 
+
+        int minLength = systemConfigService.getConfig().getPasswordMinLength() != null ?
                         systemConfigService.getConfig().getPasswordMinLength() : 6;
         String password = user.getPassword() != null ? user.getPassword() : "123456";
-        
+
         if (password.length() < minLength) {
-            throw new RuntimeException("密码长度不能少于 " + minLength + " 位");
+            throw new BusinessException(ErrorCode.PASSWORD_TOO_SHORT, "密码长度不能少于 " + minLength + " 位");
         }
-        
+
         user.setPassword(passwordEncoder.encode(password));
         return userRepository.save(user);
     }
 
     @Transactional
     public User updateUser(Long id, User userDetails, String currentUserRole) {
-        User user = userRepository.findById(id).orElseThrow(() -> new RuntimeException("用户不存在"));
-        
+        User user = userRepository.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+
         if ("ADMIN".equals(user.getRole()) && currentUserRole.contains("TEACHER")) {
-            throw new RuntimeException("权限不足：无法修改管理员账号");
+            throw new BusinessException(ErrorCode.ROLE_FORBIDDEN, "权限不足：无法修改管理员账号");
         }
         if ("ADMIN".equals(userDetails.getRole()) && currentUserRole.contains("TEACHER")) {
-            throw new RuntimeException("权限不足：无法将用户变更为管理员");
+            throw new BusinessException(ErrorCode.ROLE_FORBIDDEN, "权限不足：无法将用户变更为管理员");
         }
         
         user.setFullName(userDetails.getFullName());
@@ -92,9 +94,9 @@ public class UserService {
 
     @Transactional
     public void deleteUser(Long id, String currentUserRole) {
-        User user = userRepository.findById(id).orElseThrow(() -> new RuntimeException("用户不存在"));
+        User user = userRepository.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         if ("ADMIN".equals(user.getRole()) && currentUserRole.contains("TEACHER")) {
-            throw new RuntimeException("权限不足：无法删除管理员账号");
+            throw new BusinessException(ErrorCode.ROLE_FORBIDDEN, "权限不足：无法删除管理员账号");
         }
         userRepository.deleteById(id);
     }
@@ -104,7 +106,6 @@ public class UserService {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             List<User> users = new ArrayList<>();
-            // Skip header
             reader.readLine();
             while ((line = reader.readLine()) != null) {
                 String[] data = line.split(",");
@@ -124,7 +125,7 @@ public class UserService {
             }
             userRepository.saveAll(users);
         } catch (Exception e) {
-            throw new RuntimeException("导入失败: " + e.getMessage());
+            throw new BusinessException(ErrorCode.FILE_UPLOAD_ERROR, "导入失败: " + e.getMessage());
         }
     }
 
@@ -153,9 +154,9 @@ public class UserService {
 
     @Transactional
     public void resetPassword(Long id, String newPassword, String currentUserRole) {
-        User user = userRepository.findById(id).orElseThrow(() -> new RuntimeException("用户不存在"));
+        User user = userRepository.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         if ("ADMIN".equals(user.getRole()) && currentUserRole.contains("TEACHER")) {
-            throw new RuntimeException("权限不足：无法重置管理员密码");
+            throw new BusinessException(ErrorCode.ROLE_FORBIDDEN, "权限不足：无法重置管理员密码");
         }
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
@@ -163,7 +164,7 @@ public class UserService {
 
     @Transactional
     public User updateProfile(String username, String fullName, String newPassword) {
-        User user = userRepository.findByUsername(username).orElseThrow(() -> new RuntimeException("用户不存在"));
+        User user = userRepository.findByUsername(username).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         if (fullName != null && !fullName.isEmpty()) {
             user.setFullName(fullName);
         }

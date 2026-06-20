@@ -9,7 +9,6 @@ const api = axios.create({
     xsrfHeaderName: 'X-XSRF-TOKEN',
 });
 
-// Request interceptor
 api.interceptors.request.use(
     (config) => {
         const token = localStorage.getItem('token');
@@ -23,31 +22,70 @@ api.interceptors.request.use(
     }
 );
 
-// Response interceptor
+function isUnifiedResponse(data) {
+    return data && typeof data === 'object' && 'code' in data && 'message' in data;
+}
+
 api.interceptors.response.use(
     (response) => {
+        const { data } = response;
+
+        if (response.config.responseType === 'blob' || response.config.responseType === 'arraybuffer') {
+            return response;
+        }
+
+        if (isUnifiedResponse(data)) {
+            if (data.code === 0) {
+                response.data = data.data;
+                return response;
+            } else {
+                message.error(data.message || '请求执行失败');
+                const error = new Error(data.message || '请求执行失败');
+                error.code = data.code;
+                error.response = response;
+                return Promise.reject(error);
+            }
+        }
+
         return response;
     },
     (error) => {
         if (error.response) {
             const { status, data } = error.response;
-            if (status === 401) {
-                message.error('登录已过期，请重新登录');
-                localStorage.removeItem('token');
-                window.location.href = '/login';
-            } else if (status === 403) {
-                message.error('权限不足，拒绝访问');
-            } else if (status === 404) {
-                message.error('未找到请求的资源');
-            } else if (status === 500) {
-                message.error('服务器内部错误，请稍后再试');
+
+            if (isUnifiedResponse(data)) {
+                if (data.code === 40100 || data.code === 40101 || data.code === 40102 || status === 401) {
+                    message.error(data.message || '登录已过期，请重新登录');
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                } else if (status === 403 || data.code === 40300 || data.code === 40301) {
+                    message.error(data.message || '权限不足，拒绝访问');
+                } else if (status === 404 || (data.code >= 40400 && data.code < 40500)) {
+                    message.error(data.message || '未找到请求的资源');
+                } else if (status === 500 || (data.code >= 50000 && data.code < 50100)) {
+                    message.error(data.message || '服务器内部错误，请稍后再试');
+                } else {
+                    message.error(data.message || '请求执行失败');
+                }
             } else {
-                message.error(data.message || '请求执行失败');
+                if (status === 401) {
+                    message.error('登录已过期，请重新登录');
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                } else if (status === 403) {
+                    message.error('权限不足，拒绝访问');
+                } else if (status === 404) {
+                    message.error('未找到请求的资源');
+                } else if (status === 500) {
+                    message.error('服务器内部错误，请稍后再试');
+                } else {
+                    message.error((data && data.message) || '请求执行失败');
+                }
             }
         } else if (error.request) {
             message.error('网络连接超时或服务器无响应');
         } else {
-            message.error('请求配置异常');
+            message.error(error.message || '请求配置异常');
         }
         return Promise.reject(error);
     }
@@ -57,11 +95,9 @@ export const login = (data) => api.post('/auth/login', data);
 export const register = (data) => api.post('/auth/register', data);
 export const updateProfile = (data) => api.put('/auth/profile', data);
 
-// System Config
 export const getSystemConfig = () => api.get('/config');
 export const updateSystemConfig = (data) => api.post('/config', data);
 
-// Exams
 export const getExams = () => api.get('/exams');
 export const getMySubmissions = () => api.get('/submissions/my');
 export const createExam = (data) => api.post('/exams', data);
@@ -88,7 +124,6 @@ export const recordCheating = (examId, data) => api.post(`/exams/${examId}/recor
 export const getNotifications = () => api.get('/notifications');
 export const markNotificationRead = (id) => api.post(`/notifications/${id}/read`);
 
-// User Management
 export const getUsers = (params) => api.get('/users', { params });
 export const createUser = (data) => api.post('/users', data);
 export const updateUser = (id, data) => api.put(`/users/${id}`, data);

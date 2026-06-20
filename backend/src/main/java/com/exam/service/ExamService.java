@@ -1,5 +1,7 @@
 package com.exam.service;
 
+import com.exam.common.BusinessException;
+import com.exam.common.ErrorCode;
 import com.exam.entity.Exam;
 import com.exam.entity.ExamQuestion;
 import com.exam.entity.Question;
@@ -51,7 +53,7 @@ public class ExamService {
     }
 
     public Exam getExamById(Long id) {
-        return examRepository.findById(id).orElseThrow(() -> new RuntimeException("Exam not found"));
+        return examRepository.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.EXAM_NOT_FOUND));
     }
 
     public Exam createExam(Exam exam, String username) {
@@ -62,7 +64,7 @@ public class ExamService {
     }
     
     public Question createQuestion(Question question, String username) {
-        User user = userRepository.findByUsername(username).orElseThrow();
+        User user = userRepository.findByUsername(username).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         question.setCreator(user);
         return questionRepository.save(question);
     }
@@ -70,7 +72,7 @@ public class ExamService {
     @Transactional
     public void addQuestionToExam(Long examId, Long questionId, Integer score, Integer sequence) {
         Exam exam = getExamById(examId);
-        Question question = questionRepository.findById(questionId).orElseThrow(() -> new RuntimeException("Question not found"));
+        Question question = questionRepository.findById(questionId).orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
         
         ExamQuestion eq = new ExamQuestion();
         eq.setExam(exam);
@@ -86,7 +88,7 @@ public class ExamService {
         ExamQuestion eq = examQuestionRepository.findByExamIdOrderBySequenceAsc(examId).stream()
                 .filter(item -> item.getQuestion().getId().equals(questionId))
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("Question not found in exam"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND, "题目不在该考试中"));
         
         if (score != null) eq.setScore(score);
         if (sequence != null) eq.setSequence(sequence);
@@ -98,7 +100,7 @@ public class ExamService {
         ExamQuestion eq = examQuestionRepository.findByExamIdOrderBySequenceAsc(examId).stream()
                 .filter(item -> item.getQuestion().getId().equals(questionId))
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("Question not found in exam"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND, "题目不在该考试中"));
         examQuestionRepository.delete(eq);
     }
 
@@ -141,7 +143,7 @@ public class ExamService {
     }
 
     public void publishExam(Long examId, Exam details) {
-        Exam exam = examRepository.findById(examId).orElseThrow(() -> new RuntimeException("Exam not found"));
+        Exam exam = examRepository.findById(examId).orElseThrow(() -> new BusinessException(ErrorCode.EXAM_NOT_FOUND));
         
         // Update metadata
         if (details.getTitle() != null) exam.setTitle(details.getTitle());
@@ -196,7 +198,7 @@ public class ExamService {
 
     @Transactional
     public void deleteExam(Long examId) {
-        Exam exam = examRepository.findById(examId).orElseThrow(() -> new RuntimeException("Exam not found"));
+        Exam exam = examRepository.findById(examId).orElseThrow(() -> new BusinessException(ErrorCode.EXAM_NOT_FOUND));
         
         // 1. Delete all exam questions
         List<ExamQuestion> eqs = examQuestionRepository.findByExamIdOrderBySequenceAsc(examId);

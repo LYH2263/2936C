@@ -1,5 +1,7 @@
 package com.exam.service;
 
+import com.exam.common.BusinessException;
+import com.exam.common.ErrorCode;
 import com.exam.entity.*;
 import com.exam.repository.*;
 import com.exam.dto.SubmissionGradeDTO;
@@ -31,8 +33,8 @@ public class SubmissionService {
 
     @Transactional
     public Submission submitExam(Long examId, Map<Long, String> answers, String username) {
-        User student = userRepository.findByUsername(username).orElseThrow();
-        Exam exam = examRepository.findById(examId).orElseThrow();
+        User student = userRepository.findByUsername(username).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        Exam exam = examRepository.findById(examId).orElseThrow(() -> new BusinessException(ErrorCode.EXAM_NOT_FOUND));
         
         Submission submission = new Submission();
         submission.setExam(exam);
@@ -56,7 +58,7 @@ public class SubmissionService {
             Long questionId = entry.getKey();
             String studentAnswerText = entry.getValue();
             
-            Question question = questionRepository.findById(questionId).orElseThrow();
+            Question question = questionRepository.findById(questionId).orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
             ExamQuestion eq = eqMap.get(questionId);
             
             SubmissionAnswer answer = new SubmissionAnswer();
@@ -138,7 +140,7 @@ public class SubmissionService {
     }
 
     public Submission getSubmissionById(Long id) {
-        Submission submission = submissionRepository.findById(id).orElseThrow(() -> new RuntimeException("Submission not found"));
+        Submission submission = submissionRepository.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.SUBMISSION_NOT_FOUND));
         
         // Calculate ranking
         List<Submission> allSubmissionsForExam = submissionRepository.findByExamId(submission.getExam().getId());
@@ -159,7 +161,7 @@ public class SubmissionService {
 
     @Transactional
     public void gradeSubmission(Long submissionId, Map<Long, SubmissionGradeDTO> grades) {
-        Submission submission = submissionRepository.findById(submissionId).orElseThrow(() -> new RuntimeException("Submission not found"));
+        Submission submission = submissionRepository.findById(submissionId).orElseThrow(() -> new BusinessException(ErrorCode.SUBMISSION_NOT_FOUND));
         
         int totalScore = 0;
         for (SubmissionAnswer sa : submission.getAnswers()) {

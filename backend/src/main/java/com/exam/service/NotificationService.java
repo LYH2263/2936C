@@ -1,5 +1,7 @@
 package com.exam.service;
 
+import com.exam.common.BusinessException;
+import com.exam.common.ErrorCode;
 import com.exam.entity.Notification;
 import com.exam.entity.User;
 import com.exam.repository.NotificationRepository;
@@ -34,13 +36,13 @@ public class NotificationService {
     }
 
     public List<Notification> getUnreadNotifications(String username) {
-        User user = userRepository.findByUsername(username).orElseThrow(() -> new RuntimeException("User not found"));
+        User user = userRepository.findByUsername(username).orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         return notificationRepository.findByUserAndIsReadOrderByCreatedAtDesc(user, false);
     }
 
     @Transactional
     public void markAsRead(Long id) {
-        Notification notification = notificationRepository.findById(id).orElseThrow(() -> new RuntimeException("Notification not found"));
+        Notification notification = notificationRepository.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "通知不存在"));
         notification.setIsRead(true);
         notificationRepository.save(notification);
     }
