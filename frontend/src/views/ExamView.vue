@@ -1,16 +1,21 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
+import { ref, onMounted, nextTick, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getExam, getExamQuestions, submitExam, getSubmission, recordCheating } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { useConfigStore } from '@/stores/config';
-import { message, Modal, notification } from 'ant-design-vue';
-import { 
-  ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, 
+import { message, Modal } from 'ant-design-vue';
+import {
+  ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined,
   LeftOutlined, RightOutlined, FlagOutlined, FlagFilled,
   SendOutlined, AppstoreOutlined, UserOutlined, EyeOutlined,
   InfoCircleOutlined, SafetyOutlined, CheckCircleFilled, CloseCircleFilled
 } from '@ant-design/icons-vue';
+
+import { useExamTimer } from '@/composables/useExamTimer';
+import { useExamProgress } from '@/composables/useExamProgress';
+import { useExamLockdown } from '@/composables/useExamLockdown';
+import { useExamSubmission } from '@/composables/useExamSubmission';
 
 const route = useRoute();
 const router = useRouter();
@@ -19,146 +24,48 @@ const configStore = useConfigStore();
 const examId = route.params.id;
 const submissionId = route.query.submissionId;
 
-const exam = ref(null);
-const questions = ref([]);
-const answers = ref({}); // { questionId: answer }
-const flagged = ref(new Set());
-const currentIndex = ref(0);
-const loading = ref(true);
-const timeLeft = ref(0);
-const timer = ref(null);
-const reminderSent = ref(false);
-
-const isAnalysis = computed(() => !!submissionId);
-const submissionData = ref(null);
-
-// Anti-cheating
-const tabSwitchCount = ref(0);
-
-const currentQuestion = computed(() => questions.value[currentIndex.value]);
-const totalScore = computed(() => questions.value.reduce((sum, q) => sum + (q.score || 0), 0));
-
-const fetchData = async () => {
-  try {
-    if (isAnalysis.value) {
-      // Analysis Mode
-      const subRes = await getSubmission(submissionId);
-      submissionData.value = subRes.data;
-      exam.value = subRes.data.exam;
-      
-      const qRes = await getExamQuestions(subRes.data.exam.id);
-      questions.value = qRes.data;
-      
-      if (submissionData.value.answers) {
-        submissionData.value.answers.forEach(sa => {
-          const qId = sa.question.id || sa.question; 
-          answers.value[qId] = sa.studentAnswer;
-        });
-      }
-    } else {
-      // Exam Mode
-      const [examRes, qRes] = await Promise.all([
-        getExam(examId),
-        getExamQuestions(examId)
-      ]);
-      exam.value = examRes.data;
-      questions.value = qRes.data;
-      
-      // Check for saved progress
-      const saved = localStorage.getItem(`exam_progress_${examId}_${authStore.user?.id}`);
-      if (saved) {
-        try {
-          const { savedAnswers, savedFlagged } = JSON.parse(saved);
-          answers.value = savedAnswers || {};
-          flagged.value = new Set(savedFlagged || []);
-        } catch (e) {
-          console.error('Failed to restore progress', e);
-        }
-      }
-
-      timeLeft.value = exam.value.duration * 60; // seconds
-      startTimer();
-      
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      if (exam.value.enableCamera) {
-          initCamera();
-      }
-    }
-  } catch (e) {
-    console.error(e);
+const submission = useExamSubmission({
+  getExamApi: getExam,
+  getExamQuestionsApi: getExamQuestions,
+  submitExamApi: submitExam,
+  getSubmissionApi: getSubmission,
+  onLoadError: () => {
     message.error('加载失败');
     router.push('/dashboard');
-  } finally {
-    loading.value = false;
-  }
-};
+  },
+  onSubmitError: () => {
+    message.error('提交失败');
+  },
+  onSubmitSuccess: (data) => {
+    Modal.success({
+      title: '交卷成功',
+      content: `您的考试得分：${data.score} 分。点击确定后将返回成绩单。`,
+      onOk: () => {
+        router.push({ path: '/dashboard', query: { tab: 'scores' } });
+      },
+    });
+  },
+});
 
-const startTimer = () => {
-  timer.value = setInterval(() => {
-    if (timeLeft.value > 0) {
-      timeLeft.value--;
-      
-      // 5-minute reminder
-      if (timeLeft.value <= 300 && !reminderSent.value) {
-        notification.warning({
-          message: '考试提醒',
-          description: '距离考试结束还有不到 5 分钟，请妥善安排答题进度并及时交卷。',
-          duration: 10,
-        });
-        reminderSent.value = true;
-      }
-    } else {
-      clearInterval(timer.value);
-      handleSubmit(true);
-    }
-  }, 1000);
-};
+const timer = useExamTimer(() => {
+  handleSubmit(true);
+});
 
-const formatTime = (seconds) => {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s < 10 ? '0' + s : s}`;
-};
+const progress = useExamProgress(
+  () => examId,
+  () => authStore.user?.id,
+  () => !submission.isAnalysis.value
+);
 
-// Auto-save progress
-watch(answers, (newVal) => {
-  if (!isAnalysis.value && exam.value) {
-    localStorage.setItem(`exam_progress_${examId}_${authStore.user?.id}`, JSON.stringify({
-      savedAnswers: newVal,
-      savedFlagged: Array.from(flagged.value)
-    }));
-  }
-}, { deep: true });
+const lockdown = useExamLockdown({
+  examId: () => examId,
+  isExamMode: () => !submission.isAnalysis.value,
+  getExamConfig: () => submission.exam.value,
+  recordCheatingApi: recordCheating,
+  onForceSubmit: () => handleSubmit(true),
+});
 
-const toggleFlag = () => {
-  const qId = currentQuestion.value.question.id;
-  if (flagged.value.has(qId)) {
-    flagged.value.delete(qId);
-  } else {
-    flagged.value.add(qId);
-  }
-  // Also save flagged state
-  localStorage.setItem(`exam_progress_${examId}_${authStore.user?.id}`, JSON.stringify({
-    savedAnswers: answers.value,
-    savedFlagged: Array.from(flagged.value)
-  }));
-};
-
-const jumpTo = (index) => {
-  currentIndex.value = index;
-};
-
-const nextQuestion = () => {
-  if (currentIndex.value < questions.value.length - 1) {
-    currentIndex.value++;
-  }
-};
-
-const prevQuestion = () => {
-  if (currentIndex.value > 0) {
-    currentIndex.value--;
-  }
-};
+const videoRef = lockdown.videoRef;
 
 const handleSubmit = async (auto = false) => {
   if (!auto) {
@@ -168,187 +75,62 @@ const handleSubmit = async (auto = false) => {
       okText: '确认交卷',
       cancelText: '继续检查',
       onOk: async () => {
-        await doSubmit();
-      }
+        await performSubmit();
+      },
     });
   } else {
     message.info('考试时间到，自动交卷');
-    await doSubmit();
+    await performSubmit();
   }
 };
 
-const doSubmit = async () => {
+const performSubmit = async () => {
+  timer.stopTimer();
+  lockdown.cleanupAll();
+  progress.clearProgress();
+  await submission.doSubmit(examId, progress.answers.value);
+};
+
+const handleToggleFlag = () => {
+  const qId = submission.currentQuestion.value.question.id;
+  progress.toggleFlag(qId);
+};
+
+const handleCurrentFlag = computed(() => {
+  if (!submission.currentQuestion.value) return false;
+  return progress.isFlagged(submission.currentQuestion.value.question.id);
+});
+
+const fetchData = async () => {
   try {
-    clearInterval(timer.value);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Clean up local storage
-    localStorage.removeItem(`exam_progress_${examId}_${authStore.user?.id}`);
+    if (submissionId) {
+      const { restoredAnswers } = await submission.loadAnalysisMode(submissionId);
+      Object.assign(progress.answers.value, restoredAnswers);
+    } else {
+      const { duration, enableCamera } = await submission.loadExamMode(examId);
+      progress.restoreProgress();
+      progress.startAutoSave();
+      timer.startTimer(duration);
 
-    const finalAnswers = {};
-    Object.keys(answers.value).forEach(qId => {
-      const val = answers.value[qId];
-      finalAnswers[qId] = Array.isArray(val) ? val.sort().join(',') : val;
-    });
-
-    const res = await submitExam(examId, finalAnswers);
-    
-    Modal.success({
-      title: '交卷成功',
-      content: `您的考试得分：${res.data.score} 分。点击确定后将返回成绩单。`,
-      onOk: () => {
-        router.push({ path: '/dashboard', query: { tab: 'scores' } });
-      }
-    });
-    
-  } catch (e) {
-    message.error('提交失败');
-  }
-};
-
-const getCorrectAnswer = (qId) => {
-   if (!isAnalysis.value) return null;
-   const q = questions.value.find(i => i.question.id === qId);
-   if (exam.value && !exam.value.allowViewAnalysis) return '***';
-   return q ? q.question.answer : '';
-};
-
-const getAnalysis = (qId) => {
-   if (!isAnalysis.value) return null;
-   const q = questions.value.find(i => i.question.id === qId);
-   if (exam.value && !exam.value.allowViewAnalysis) return '教师设置了隐藏解析';
-   return q ? q.question.analysis : '';
-};
-
-const getTeacherComment = (qId) => {
-   if (!isAnalysis.value || !submissionData.value.answers) return null;
-   const sa = submissionData.value.answers.find(a => (a.question.id || a.question) === qId);
-   if (exam.value && !exam.value.allowViewAnalysis) return null;
-   return sa ? sa.teacherComment : null;
-};
-
-const getQuestionScore = (qId) => {
-   if (!isAnalysis.value || !submissionData.value.answers) return 0;
-   const sa = submissionData.value.answers.find(a => (a.question.id || a.question) === qId);
-   return sa ? sa.score : 0;
-};
-
-const isCorrect = (qId) => {
-   if (!isAnalysis.value) return false;
-   const studentAns = answers.value[qId];
-   const correctAns = getCorrectAnswer(qId);
-   return studentAns === correctAns;
-};
-
-const videoRef = ref(null);
-const stream = ref(null);
-
-const initCamera = async () => {
-  try {
-    stream.value = await navigator.mediaDevices.getUserMedia({ video: true });
-    if (videoRef.value) {
-      videoRef.value.srcObject = stream.value;
+      await nextTick();
+      lockdown.initAll(enableCamera);
     }
   } catch (e) {
-    message.warning('无法访问摄像头，无法进行智能监考');
+    console.error(e);
+  } finally {
+    submission.setLoading(false);
   }
-};
-
-const handleVisibilityChange = () => {
-  if (document.hidden && !isAnalysis.value && timeLeft.value > 0 && exam.value) {
-    recordCheatingEvent('TAB_SWITCH', 'Student switched tab/minimized window');
-    
-    if (exam.value.allowTabSwitch === false) {
-        tabSwitchCount.value++;
-        const limit = exam.value.tabSwitchLimit || 3;
-        
-        if (tabSwitchCount.value >= limit) {
-            Modal.error({
-                title: '考试由于严重违规已强制结束',
-                content: `由于您切屏次数达到上限 (${limit} 次)，系统已自动交卷。`,
-                onOk: () => handleSubmit(true)
-            });
-        } else {
-            Modal.warning({
-                title: '警告：检测到切屏行为',
-                content: `您已切出考试界面 ${tabSwitchCount.value} 次！限制次数为 ${limit} 次，超出后将自动交卷。`,
-                centered: true,
-            });
-        }
-    }
-  }
-};
-
-const recordCheatingEvent = async (type, detail) => {
-    try {
-        await recordCheating(examId, { type, detail });
-    } catch (e) {
-        console.error('Failed to record cheating event', e);
-    }
-};
-
-const handleCopyPaste = (e) => {
-    e.preventDefault();
-    recordCheatingEvent('LOCKDOWN_VIOLATION', `Attempted ${e.type} operation`);
-    message.warning('为了考试公平，系统已禁用复制、粘贴和剪切功能');
-};
-
-const initLockdown = () => {
-    const canvas = document.querySelector('.question-canvas');
-    if (canvas) {
-        canvas.addEventListener('copy', handleCopyPaste);
-        canvas.addEventListener('paste', handleCopyPaste);
-        canvas.addEventListener('cut', handleCopyPaste);
-        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    }
-};
-
-const snapshotInterval = ref(null);
-const takeSnapshot = () => {
-    if (!videoRef.value || !stream.value) return;
-    
-    const canvas = document.createElement('canvas');
-    canvas.width = 320;
-    canvas.height = 240;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoRef.value, 0, 0, 320, 240);
-    
-    // In a real app, we'd upload this blob. For now, we log the event.
-    recordCheatingEvent('SNAPSHOT', 'Periodic camera snapshot captured');
 };
 
 onMounted(() => {
-  fetchData().then(() => {
-      // Initialize lockdown after data is loaded and DOM is ready
-      nextTick(() => {
-          initLockdown();
-          if (!isAnalysis.value && exam.value?.enableCamera) {
-              snapshotInterval.value = setInterval(takeSnapshot, 5 * 60 * 1000); // Every 5 mins
-          }
-      });
-  });
+  fetchData();
 });
 
-onUnmounted(() => {
-  clearInterval(timer.value);
-  clearInterval(snapshotInterval.value);
-  document.removeEventListener('visibilitychange', handleVisibilityChange);
-  
-  const canvas = document.querySelector('.question-canvas');
-  if (canvas) {
-      canvas.removeEventListener('copy', handleCopyPaste);
-      canvas.removeEventListener('paste', handleCopyPaste);
-      canvas.removeEventListener('cut', handleCopyPaste);
-  }
-
-  if (stream.value) {
-    stream.value.getTracks().forEach(track => track.stop());
-  }
-});
+const isCorrect = (qId) => submission.isCorrect(qId, progress.answers.value[qId]);
 </script>
 
 <template>
-  <div class="exam-page-container" v-if="exam">
+  <div class="exam-page-container" v-if="submission.exam.value">
     <a-layout class="full-height-layout">
       <!-- Fixed Sticky Header -->
       <a-layout-header class="prof-exam-header">
@@ -357,17 +139,17 @@ onUnmounted(() => {
              <img :src="configStore.logoUrl" alt="logo" />
            </div>
            <div class="exam-meta-info">
-             <h2 class="exam-title-text">{{ exam.title }}</h2>
-             <span class="course-tag">{{ exam.course }}</span>
+             <h2 class="exam-title-text">{{ submission.exam.value.title }}</h2>
+             <span class="course-tag">{{ submission.exam.value.course }}</span>
            </div>
          </div>
          
          <div class="header-center">
-            <div class="timer-display" :class="{ 'urgent': timeLeft < (exam.duration * 60 * 0.1) }" v-if="!isAnalysis">
+            <div class="timer-display" :class="{ 'urgent': timer.isUrgent() }" v-if="!submission.isAnalysis.value">
                <span class="time-label">剩余时间</span>
-               <span class="time-val">{{ formatTime(timeLeft) }}</span>
+               <span class="time-val">{{ timer.formatTime(timer.timeLeft.value) }}</span>
                <div class="progress-under">
-                 <div class="progress-bar" :style="{ width: (timeLeft / (exam.duration * 60) * 100) + '%' }"></div>
+                 <div class="progress-bar" :style="{ width: timer.progressPercent() + '%' }"></div>
                </div>
             </div>
             <div v-else class="analysis-badge">
@@ -379,7 +161,7 @@ onUnmounted(() => {
             <div class="user-id-badge">
                <UserOutlined /> {{ authStore.user?.fullName }} ({{ authStore.user?.username }})
             </div>
-            <a-button type="primary" danger shape="round" @click="handleSubmit(false)" v-if="!isAnalysis" class="finish-exam-btn">
+            <a-button type="primary" danger shape="round" @click="handleSubmit(false)" v-if="!submission.isAnalysis.value" class="finish-exam-btn">
                提交试卷
             </a-button>
             <a-button shape="round" @click="router.push('/dashboard')" v-else>
@@ -404,22 +186,22 @@ onUnmounted(() => {
                   </div>
                   <div class="nav-grid">
                      <div 
-                        v-for="(q, idx) in questions" 
+                        v-for="(q, idx) in submission.questions.value" 
                         :key="q.id" 
                         class="nav-cell"
                         :class="{ 
-                           'is-active': currentIndex === idx,
-                           'is-done': answers[q.question.id] !== undefined && answers[q.question.id] !== '',
-                           'is-flagged': flagged.has(q.question.id)
+                           'is-active': submission.currentIndex.value === idx,
+                           'is-done': progress.isAnswered(q.question.id),
+                           'is-flagged': progress.isFlagged(q.question.id)
                         }"
-                        @click="jumpTo(idx)"
+                        @click="submission.jumpTo(idx)"
                      >
                         {{ idx + 1 }}
                      </div>
                   </div>
                </div>
                
-               <div v-if="!isAnalysis && exam.enableCamera" class="monitor-card">
+               <div v-if="!submission.isAnalysis.value && submission.exam.value.enableCamera" class="monitor-card">
                   <div class="monitor-head">智能监考系统</div>
                   <div class="video-container">
                     <video ref="videoRef" autoplay playsinline muted></video>
@@ -431,32 +213,32 @@ onUnmounted(() => {
 
                <div class="exam-rules-mini">
                   <p><InfoCircleOutlined /> 系统检测到切屏将立即计入次数</p>
-                  <p v-if="!exam.allowTabSwitch"><SafetyOutlined /> 切屏限制: {{ tabSwitchCount }} / {{ exam.tabSwitchLimit }}</p>
+                  <p v-if="!submission.exam.value.allowTabSwitch"><SafetyOutlined /> 切屏限制: {{ lockdown.tabSwitchCount.value }} / {{ submission.exam.value.tabSwitchLimit }}</p>
                </div>
             </div>
          </a-layout-sider>
 
          <!-- Right Content: Question Content -->
          <a-layout-content class="prof-exam-content">
-            <div class="question-canvas" v-if="currentQuestion">
+            <div class="question-canvas" v-if="submission.currentQuestion.value">
                <div class="q-scope-header">
                   <div class="q-type-label">
                      <a-tag color="blue">
-                        {{ { 'SINGLE': '单选题', 'MULTI': '多选题', 'JUDGE': '判断题', 'SHORT': '简答题' }[currentQuestion.question.type] }}
+                        {{ { 'SINGLE': '单选题', 'MULTI': '多选题', 'JUDGE': '判断题', 'SHORT': '简答题' }[submission.currentQuestion.value.question.type] }}
                      </a-tag>
-                     <span class="q-index-info">第 {{ currentIndex + 1 }} 题 / 共 {{ questions.length }} 题</span>
+                     <span class="q-index-info">第 {{ submission.currentIndex.value + 1 }} 题 / 共 {{ submission.questions.value.length }} 题</span>
                   </div>
                   <div class="q-actions-right">
-                    <span class="q-score-tag">分值: {{ currentQuestion.score }}分</span>
+                    <span class="q-score-tag">分值: {{ submission.currentQuestion.value.score }}分</span>
                     <a-button 
-                      v-if="!isAnalysis"
+                      v-if="!submission.isAnalysis.value"
                       type="text" 
                       class="flag-btn" 
-                      @click="toggleFlag"
-                      :class="{ 'flagged-active': flagged.has(currentQuestion.question.id) }"
+                      @click="handleToggleFlag"
+                      :class="{ 'flagged-active': handleCurrentFlag }"
                     >
                       <template #icon>
-                        <FlagFilled v-if="flagged.has(currentQuestion.question.id)" />
+                        <FlagFilled v-if="handleCurrentFlag" />
                         <FlagOutlined v-else />
                       </template>
                       标记此题
@@ -465,20 +247,20 @@ onUnmounted(() => {
                </div>
 
                <div class="q-content-body">
-                  <div class="question-text" v-html="currentQuestion.question.content"></div>
+                  <div class="question-text" v-html="submission.currentQuestion.value.question.content"></div>
                   
                   <div class="answer-interaction-area">
                      <!-- SINGLE -->
-                     <a-radio-group v-if="currentQuestion.question.type === 'SINGLE'" v-model:value="answers[currentQuestion.question.id]" :disabled="isAnalysis" class="choice-group">
-                        <a-radio class="choice-item" v-for="opt in JSON.parse(currentQuestion.question.options)" :key="opt.label" :value="opt.label">
+                     <a-radio-group v-if="submission.currentQuestion.value.question.type === 'SINGLE'" v-model:value="progress.answers.value[submission.currentQuestion.value.question.id]" :disabled="submission.isAnalysis.value" class="choice-group">
+                        <a-radio class="choice-item" v-for="opt in JSON.parse(submission.currentQuestion.value.question.options)" :key="opt.label" :value="opt.label">
                            <span class="choice-key">{{ opt.label }}</span>
                            <span class="choice-text">{{ opt.text }}</span>
                         </a-radio>
                      </a-radio-group>
                      
                      <!-- MULTI -->
-                     <a-checkbox-group v-if="currentQuestion.question.type === 'MULTI'" v-model:value="answers[currentQuestion.question.id]" :disabled="isAnalysis" class="choice-group">
-                        <div v-for="opt in JSON.parse(currentQuestion.question.options)" :key="opt.label" class="choice-item multi-wrap">
+                     <a-checkbox-group v-if="submission.currentQuestion.value.question.type === 'MULTI'" v-model:value="progress.answers.value[submission.currentQuestion.value.question.id]" :disabled="submission.isAnalysis.value" class="choice-group">
+                        <div v-for="opt in JSON.parse(submission.currentQuestion.value.question.options)" :key="opt.label" class="choice-item multi-wrap">
                            <a-checkbox :value="opt.label">
                               <span class="choice-key">{{ opt.label }}</span>
                               <span class="choice-text">{{ opt.text }}</span>
@@ -487,57 +269,57 @@ onUnmounted(() => {
                      </a-checkbox-group>
 
                      <!-- JUDGE -->
-                     <a-radio-group v-if="currentQuestion.question.type === 'JUDGE'" v-model:value="answers[currentQuestion.question.id]" :disabled="isAnalysis" class="judge-group">
+                     <a-radio-group v-if="submission.currentQuestion.value.question.type === 'JUDGE'" v-model:value="progress.answers.value[submission.currentQuestion.value.question.id]" :disabled="submission.isAnalysis.value" class="judge-group">
                         <a-radio-button value="TRUE" class="judge-btn">正确 (TRUE)</a-radio-button>
                         <a-radio-button value="FALSE" class="judge-btn">错误 (FALSE)</a-radio-button>
                      </a-radio-group>
                      
                      <!-- SHORT -->
                      <a-textarea 
-                        v-if="currentQuestion.question.type === 'SHORT'" 
-                        v-model:value="answers[currentQuestion.question.id]" 
+                        v-if="submission.currentQuestion.value.question.type === 'SHORT'" 
+                        v-model:value="progress.answers.value[submission.currentQuestion.value.question.id]" 
                         placeholder="在此输入您的回答..."
                         :rows="12" 
-                        :disabled="isAnalysis" 
+                        :disabled="submission.isAnalysis.value" 
                         class="essay-editor"
                      />
                   </div>
                </div>
 
                <!-- Analysis View (Visible only during review) -->
-               <div v-if="isAnalysis" class="prof-analysis-section">
+               <div v-if="submission.isAnalysis.value" class="prof-analysis-section">
                   <div class="analysis-header-row">
-                     <div class="judge-banner" :class="isCorrect(currentQuestion.question.id) ? 'correct' : 'wrong'">
-                        <CheckCircleFilled v-if="isCorrect(currentQuestion.question.id)" />
+                     <div class="judge-banner" :class="isCorrect(submission.currentQuestion.value.question.id) ? 'correct' : 'wrong'">
+                        <CheckCircleFilled v-if="isCorrect(submission.currentQuestion.value.question.id)" />
                         <CloseCircleFilled v-else />
-                        <span>{{ isCorrect(currentQuestion.question.id) ? '回答正确' : '回答错误' }}</span>
+                        <span>{{ isCorrect(submission.currentQuestion.value.question.id) ? '回答正确' : '回答错误' }}</span>
                      </div>
                      <div class="analysis-stat-info">
-                        本题得分: <span class="score-num">{{ getQuestionScore(currentQuestion.question.id) }}</span> / {{ currentQuestion.score }}
+                        本题得分: <span class="score-num">{{ submission.getQuestionScore(submission.currentQuestion.value.question.id) }}</span> / {{ submission.currentQuestion.value.score }}
                      </div>
                   </div>
                   
                   <div class="analysis-details-grid">
                      <div class="detail-col">
                         <div class="detail-label">我的作答</div>
-                        <div class="detail-val" :class="{ 'error-text': !isCorrect(currentQuestion.question.id) }">
-                           {{ answers[currentQuestion.question.id] || '(未答)' }}
+                        <div class="detail-val" :class="{ 'error-text': !isCorrect(submission.currentQuestion.value.question.id) }">
+                           {{ progress.answers.value[submission.currentQuestion.value.question.id] || '(未答)' }}
                         </div>
                      </div>
                      <div class="detail-col">
                         <div class="detail-label">正确答案</div>
-                        <div class="detail-val correct-text">{{ getCorrectAnswer(currentQuestion.question.id) }}</div>
+                        <div class="detail-val correct-text">{{ submission.getCorrectAnswer(submission.currentQuestion.value.question.id) }}</div>
                      </div>
                   </div>
 
-                  <div class="teacher-comment-box" v-if="getTeacherComment(currentQuestion.question.id)">
+                  <div class="teacher-comment-box" v-if="submission.getTeacherComment(submission.currentQuestion.value.question.id)">
                      <div class="comment-label">教师评语</div>
-                     <div class="comment-content">{{ getTeacherComment(currentQuestion.question.id) }}</div>
+                     <div class="comment-content">{{ submission.getTeacherComment(submission.currentQuestion.value.question.id) }}</div>
                   </div>
 
                   <div class="explanation-box">
                      <div class="exp-label">解析说明</div>
-                     <div class="exp-content">{{ getAnalysis(currentQuestion.question.id) || '暂无解析数据' }}</div>
+                     <div class="exp-content">{{ submission.getAnalysis(submission.currentQuestion.value.question.id) || '暂无解析数据' }}</div>
                   </div>
                </div>
             </div>
@@ -545,15 +327,15 @@ onUnmounted(() => {
             <!-- Enhanced Sticky Pager -->
             <div class="prof-exam-pager">
                <div class="pager-left">
-                  <a-button @click="prevQuestion" :disabled="currentIndex === 0" size="large" ghost type="primary" class="nav-btn">
+                  <a-button @click="submission.prevQuestion" :disabled="submission.currentIndex.value === 0" size="large" ghost type="primary" class="nav-btn">
                      <LeftOutlined /> 上一题
                   </a-button>
                </div>
                <div class="pager-center">
-                  进度: <a-progress :percent="Math.round(((Object.keys(answers).filter(k => answers[k] !== '').length) / questions.length) * 100)" size="small" style="width: 200px" />
+                  进度: <a-progress :percent="submission.answerProgressPercent(progress.answers.value)" size="small" style="width: 200px" />
                </div>
                <div class="pager-right">
-                  <a-button type="primary" @click="nextQuestion" :disabled="currentIndex === questions.length - 1" size="large" class="nav-btn next">
+                  <a-button type="primary" @click="submission.nextQuestion" :disabled="submission.currentIndex.value === submission.questions.value.length - 1" size="large" class="nav-btn next">
                      下一题 <RightOutlined />
                   </a-button>
                </div>
