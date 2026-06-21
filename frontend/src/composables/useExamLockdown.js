@@ -115,7 +115,7 @@ export function useExamLockdown(options = {}) {
 
   const handleCopyPaste = (e) => {
     e.preventDefault();
-    recordCheatingEvent('LOCKDOWN_VIOLATION', `Attempted ${e.type} operation');
+    recordCheatingEvent('LOCKDOWN_VIOLATION', `Attempted ${e.type} operation`);
     message.warning('为了考试公平，系统已禁用复制、粘贴和剪切功能');
   };
 

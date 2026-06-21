@@ -49,7 +49,7 @@ public class ApiResponseAdvice implements ResponseBodyAdvice<Object> {
             }
 
             if (innerBody == null) {
-                ApiResponse<Void> apiResponse = ApiResponse.success(null, path);
+                ApiResponse<Void> apiResponse = ApiResponse.<Void>success(null, path);
                 return ResponseEntity.status(re.getStatusCode()).headers(re.getHeaders()).body(apiResponse);
             }
 
@@ -70,7 +70,7 @@ public class ApiResponseAdvice implements ResponseBodyAdvice<Object> {
         }
 
         if (body == null) {
-            return ApiResponse.success(null, path);
+            return ApiResponse.<Void>success(null, path);
         }
 
         return ApiResponse.success(body, path);
